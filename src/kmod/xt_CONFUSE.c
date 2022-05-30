@@ -70,7 +70,7 @@ confuse_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		l3_hdr_len = (unsigned int)sizeof(struct ipv6hdr);
 	} else {
 		pr_warn("unknown ip version: %u\n", iph->version);
-		return XT_CONTINUE;
+		return NF_DROP;
 	}
 
 	if (prot != IPPROTO_UDP) {
@@ -78,13 +78,17 @@ confuse_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		return XT_CONTINUE;
 	}
 
-	data = (u8*)&uh[1];
 	l4_total = be16_to_cpu(uh->len);
+	if (skb_linearize(skb)) {
+		pr_warn("skb_linearize skb fail");
+		return NF_DROP;
+	}
 	
 	if (!pskb_may_pull(skb, l3_hdr_len + l4_total)) {
 		pr_warn("pskb_may_pull fail\n");
-		return XT_CONTINUE;
+		return NF_DROP;
 	}
+	data = (u8*)(udp_hdr(skb) + 1);
 	data_len = l4_total - sizeof(struct udphdr);
 	confuse_data(data, data_len, param->srand);
 	return XT_CONTINUE;
@@ -97,7 +101,7 @@ static struct xt_target confuse_tg_reg[] __read_mostly = {
 		.family		= NFPROTO_IPV6,
 		.target		= confuse_tg,
 		.targetsize	= sizeof(struct nf_confuse_param),
-		.table		= "filter",
+		.table		= "mangle",
 		.hooks		= (1 << NF_INET_LOCAL_IN) | (1 << NF_INET_LOCAL_OUT),
 		.me		= THIS_MODULE,
 	}, {
@@ -106,7 +110,7 @@ static struct xt_target confuse_tg_reg[] __read_mostly = {
 		.family		= NFPROTO_IPV4,
 		.target		= confuse_tg,
 		.targetsize	= sizeof(struct nf_confuse_param),
-		.table		= "filter",
+		.table		= "mangle",
 		.hooks		= (1 << NF_INET_LOCAL_IN) | (1 << NF_INET_LOCAL_OUT),
 		.me		= THIS_MODULE,
 	}
