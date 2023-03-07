@@ -5,9 +5,13 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/module.h>
 #include <linux/ip.h>
-#include <linux/ipv6.h>
 #include <linux/udp.h>
 #include <linux/netfilter/x_tables.h>
+#include <net/udp.h>
+#if IS_ENABLED(CONFIG_IPV6)
+#include <linux/ipv6.h>
+#include <net/ip6_checksum.h>
+#endif
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("xiaofan <xfan1024@live.com>");
@@ -65,10 +69,14 @@ confuse_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	if (iph->version == 4) {
 		prot = iph->protocol;
 		l3_hdr_len = (unsigned int)sizeof(struct iphdr);
-	} else if (iph->version == 6) {
+	}
+#if IS_ENABLED(CONFIG_IPV6)
+	else if (iph->version == 6) {
 		prot = ((struct ipv6hdr*)iph)->nexthdr;
 		l3_hdr_len = (unsigned int)sizeof(struct ipv6hdr);
-	} else {
+	}
+#endif
+	else {
 		pr_warn("unknown ip version: %u\n", iph->version);
 		return NF_DROP;
 	}
@@ -83,7 +91,7 @@ confuse_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		pr_warn("skb_linearize skb fail");
 		return NF_DROP;
 	}
-	
+
 	if (!pskb_may_pull(skb, l3_hdr_len + l4_total)) {
 		pr_warn("pskb_may_pull fail\n");
 		return NF_DROP;
@@ -91,6 +99,18 @@ confuse_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	data = (u8*)(udp_hdr(skb) + 1);
 	data_len = l4_total - sizeof(struct udphdr);
 	confuse_data(data, data_len, param->srand);
+	if (!skb->skb_iif && skb->ip_summed == CHECKSUM_NONE) {
+		// only modify csum for outgoing packet and not csum offload
+		if (iph->version == 4) {
+			udp_set_csum(false, skb, iph->saddr, iph->daddr, l4_total);
+		}
+#if IS_ENABLED(CONFIG_IPV6)
+		else if (iph->version == 6) {
+			struct ipv6hdr *ip6h = ipv6_hdr(skb);
+			udp6_set_csum(false, skb, &ip6h->saddr, &ip6h->daddr, l4_total);
+		}
+#endif
+	}
 	return XT_CONTINUE;
 }
 
@@ -104,8 +124,9 @@ static struct xt_target confuse_tg_reg[] __read_mostly = {
 		.table		= "mangle",
 		.hooks		= (1 << NF_INET_LOCAL_IN) | (1 << NF_INET_LOCAL_OUT),
 		.me		= THIS_MODULE,
-	}, {
+	},
 #endif
+    {
 		.name		= "CONFUSE",
 		.family		= NFPROTO_IPV4,
 		.target		= confuse_tg,
@@ -113,7 +134,7 @@ static struct xt_target confuse_tg_reg[] __read_mostly = {
 		.table		= "mangle",
 		.hooks		= (1 << NF_INET_LOCAL_IN) | (1 << NF_INET_LOCAL_OUT),
 		.me		= THIS_MODULE,
-	}
+	},
 };
 
 static int __init confuse_tg_init(void)
