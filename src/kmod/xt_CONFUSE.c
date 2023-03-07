@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* modify udp packet data to avoid deep packet inspection
+/*
+ * modify udp packet data to avoid deep packet inspection
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -99,17 +100,28 @@ confuse_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	data = (u8*)(udp_hdr(skb) + 1);
 	data_len = l4_total - sizeof(struct udphdr);
 	confuse_data(data, data_len, param->srand);
-	if (!skb->skb_iif && skb->ip_summed == CHECKSUM_NONE) {
-		// only modify csum for outgoing packet and not csum offload
-		if (iph->version == 4) {
-			udp_set_csum(false, skb, iph->saddr, iph->daddr, l4_total);
-		}
+	if (!skb->skb_iif) {
+		if (skb->ip_summed == CHECKSUM_NONE) {
+			// fix csum only send-skb not offload
+			if (iph->version == 4) {
+				udp_set_csum(false, skb, iph->saddr, iph->daddr, l4_total);
+			}
 #if IS_ENABLED(CONFIG_IPV6)
-		else if (iph->version == 6) {
-			struct ipv6hdr *ip6h = ipv6_hdr(skb);
-			udp6_set_csum(false, skb, &ip6h->saddr, &ip6h->daddr, l4_total);
-		}
+			else if (iph->version == 6) {
+				struct ipv6hdr *ip6h = ipv6_hdr(skb);
+				udp6_set_csum(false, skb, &ip6h->saddr, &ip6h->daddr, l4_total);
+			}
 #endif
+		}
+	}
+	else {
+		if (skb->ip_summed == CHECKSUM_NONE) {
+			// simply set no need to check csum only recv-skb not offload
+			// maybe we could check csum before confuse_data called
+			// but it consumes cpu performance and not necessary
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
+			uh->check = 0;
+		}
 	}
 	return XT_CONTINUE;
 }
@@ -126,7 +138,7 @@ static struct xt_target confuse_tg_reg[] __read_mostly = {
 		.me		= THIS_MODULE,
 	},
 #endif
-    {
+	{
 		.name		= "CONFUSE",
 		.family		= NFPROTO_IPV4,
 		.target		= confuse_tg,
